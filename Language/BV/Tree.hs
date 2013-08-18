@@ -1,7 +1,9 @@
 {-# LANGUAGE DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
 {-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE FlexibleContexts, FlexibleInstances, UndecidableInstances #-}
 
 module Language.BV.Tree where
@@ -14,42 +16,52 @@ import Data.Traversable
 
 data Two = V1 | V2 deriving (Eq, Ord, Read, Show)
 
-data Free f a = V a
-              | In { out :: f (Free f a) }
-              | Fold !(Free f a) !(Free f a) (Scope Two (Free f) a)
-              | Hole ![a] -- hole carrying the free vars bound by the context around it
+data Free m f a where
+    V    :: a -> Free m f a
+    In   :: { measureFun :: forall a. f(Free m f a) -> m, measure :: m, out :: f (Free m f a) } -> Free m f a
+    Fold :: !(Free m f a) -> !(Free m f a) -> (Scope Two (Free m f) a) -> Free m f a
 
-open (In x) = Just x
+open In{out} = Just out
 open _      = Nothing
 
-instance Functor f => Monad (Free f) where
+instance Functor f => Monad (Free m f) where
   return = V
-  Hole vv       >>= f = error "Hole vv >>= f"
   V a           >>= f = f a
   Fold e e0 lam >>= f = Fold (e >>= f) (e0 >>= f) (lam >>>= f)
-  In g          >>= f = In $ fmap (>>= f) g
+  In measurefun _ g >>= f = let g' = fmap (>>= f) g in In measurefun (measurefun g') g'
 
---foldFix :: Functor f => (f a -> a) -> (a -> a -> a) -> Free f a -> a
-foldFix _   _    _     (V a)             = a
-foldFix phi fold hole (In f)             = phi  (foldFix phi fold hole `fmap` f)
-foldFix phi fold hole (Fold a1 a2 scope) = fold (foldFix phi fold hole a1) (foldFix phi fold hole a2) scope
-foldFix _   _    hole (Hole vv) = hole vv
+hoist :: (Functor f, Functor g) =>
+         (forall a. f a -> g a) -> (forall a. g(Free m g a) -> m) -> Free m f a -> Free m g a
+hoist phi measureFun (V a) = V a
+hoist phi measureFun (In{out}) = let out' = hoist phi measureFun <$> phi out
+                                 in In measureFun (measureFun out') out'
+hoist phi measureFun (Fold v1 v2 e) =
+    Fold (hoist phi measureFun v1)
+         (hoist phi measureFun v2)
+         (toScope $ hoist phi measureFun $ fromScope e)
 
-foldHoles :: (Applicative m, Traversable f, Eq a) =>
-             (forall v. Eq v => [v] -> m(Free f v)) -> Free f a -> m (Free f a)
-foldHoles h (V a) = pure (V a)
-foldHoles h (In f) = In <$> traverse (foldHoles h) f
-foldHoles h (Fold v1 v2 f) = Fold <$> foldHoles h v1 <*> foldHoles h v2 <*> (toScope <$> foldHoles h (fromScope f))
-foldHoles h (Hole vv) = h vv
-{-
-deriving instance (Functor f, Eq1 f, Eq a, Eq (f(Free f a))) => Eq (Free f a)
-deriving instance (Functor f, Ord1 f, Ord a, Ord (f(Free f a))) => Ord (Free f a)
-deriving instance (Functor f, Read1 f, Read a, Read (f(Free f a))) => Read (Free f a)
-deriving instance (Functor f, Show1 f, Show a, Show (f(Free f a))) => Show (Free f a)
+foldFix _   _    (V a)              = a
+foldFix phi fold In{out}            = phi  (foldFix phi fold `fmap` out)
+foldFix phi fold (Fold a1 a2 scope) = fold (foldFix phi fold a1) (foldFix phi fold a2) scope
 
-instance (Functor f, Eq1 f) => Eq1 (Free f)
--}
-deriving instance Functor     f => Functor     (Free f)
-deriving instance Foldable    f => Foldable    (Free f)
-deriving instance Traversable f => Traversable (Free f)
+foldFixM _   _   (V a)               = return a
+foldFixM phi fold In{out}            = phi =<< (foldFixM phi fold `Data.Traversable.mapM` out)
+foldFixM phi fold (Fold a1 a2 scope) =
+  let go = foldFixM phi fold in
+  do { b1 <- go a1 ; b2 <- go a2 ; fold b1 b2 scope }
 
+instance Functor f => Functor (Free m f) where
+    {-# INLINE fmap #-}
+    fmap f (In measurefun _ out) = In measurefun (measurefun out') out' where
+       out' = fmap (fmap f) out
+    fmap f (V a) = V (f a)
+    fmap f (Fold v1 v2 e) = Fold (fmap f v1) (fmap f v2) (fmap f e)
+
+instance Traversable f => Foldable (Free m f) where foldMap = foldMapDefault
+
+instance Traversable f => Traversable (Free m f) where
+    {-# INLINE traverse #-}
+    traverse f (In mF _ out) = mk <$> traverse (traverse f) out
+        where mk out' = In mF (mF out') out'
+    traverse f (V a) = V <$> f a
+    traverse f (Fold v1 v2 e) = Fold <$> traverse f v1 <*> traverse f v2 <*> traverse f e

@@ -1,5 +1,6 @@
 {-# LANGUAGE RecordWildCards, NamedFieldPuns, DisambiguateRecordFields #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 
 module Language.BV.Parser where
@@ -11,6 +12,8 @@ import Text.ParserCombinators.Parsec hiding ((<|>))
 import Text.ParserCombinators.Parsec.Char
 import Text.ParserCombinators.Parsec.Language
 import qualified Text.ParserCombinators.Parsec.Token as T
+import Language.BV.Eval
+import Language.BV.Program
 import Language.BV.Syntax
 import Prelude hiding (exp)
 
@@ -26,10 +29,19 @@ import Prelude hiding (exp)
           id  ::= [a-z][a-z_0-9]*
 -}
 
+instance Read (Prog String) where
+    readsPrec _ s = case parse ((,) <$> program <*> getInput) "" s of
+                      Left err -> []
+                      Right x -> [x]
+
+instance Read (Exp String) where
+    readsPrec _ s = case parse ((,) <$> exp <*> getInput) "" s of
+                      Left err -> []
+                      Right res -> [res]
+
 parseProgram = parse program ""
 
-program = parens (prog <$> (symbol "lambda" *> parens identifier) <*> exp)
-  where prog v exp = Prog (abstract1 v exp)
+program = parens (close' <$> (symbol "lambda" *> parens identifier) <*> exp)
 
 exp =
     constant 0 <$ symbol "0" <|>

@@ -5,16 +5,24 @@ module Language.BV.Solve where
 import Bound
 import Control.Applicative
 import Control.Monad
+import Control.Monad.Trans
 import Control.Monad.Stream
+import Data.Binary
+import qualified Data.ByteString.Lazy as L
+import qualified Data.ByteString.Char8 as S
+import Database.Redis hiding (eval)
 import Data.Monoid
 import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Word
 import Language.BV.Gen
 import Language.BV.Eval
 import Language.BV.Symbolic
 import Language.BV.Syntax
+import Language.BV.Parser
 import Language.BV.Tree
+import Language.BV.Program
 
 data Problem = Problem
                { probId   :: Text,
@@ -33,10 +41,10 @@ problemConstraints p =
     Uses (uses p) :
     [ Value i o | (i,o) <- values p ]
 
-satisfies :: Show a => Prog a -> Constraint -> Bool
-satisfies p (Size x)    = sizeP p == x
-satisfies p (Uses ops)  = operators p == ops
-satisfies p (Value i o) = eval p i == o
+satisfies :: Show a => Constraint -> Prog a -> Bool
+satisfies (Size x)    p = sizeP p == x
+satisfies (Uses ops)  p = operators p `Set.isSubsetOf` ops
+satisfies (Value i o) p = eval p i == o
 
 data W a = W a {-# UNPACK #-} !Int deriving Functor
 instance Monad W where
@@ -46,35 +54,33 @@ instance Monad W where
 runW (W a w) = (a, w)
 tell w = W () w
 
-solutions generate p = (sols, 0::Integer) where
-  sols =
-        filter (\sol -> all (\x -> satisfies sol x) valueconstraints)
-               (fmap close $ generate (probSize p - 1) (uses p) start)
-
-  start = Hole ["inp"]
-  close = Prog . abstract1 "inp"
-  sizeC : usesC : valueconstraints = problemConstraints p
-
-data Count b = Count {-# UNPACK #-} !Int b
--- keep track of the evaluation count
--- written recursively instead of using the Writer monad,
--- otherwise it blows the stack and performs terribly
-solutionsCount generate p = go (0::Int) [] (fmap close $ generate (probSize p - 1) (uses p) start)
+solutions generate p =
+    filter (\sol -> all (`satisfies` sol) valueconstraints)
+           (map close $ generate (probSize p - 1) (uses p))
  where
-  go !count acc [] = Count count acc
-  go !count acc (s:ss) =
-      case go' 0 s valueconstraints of
-        Count count' True  -> go (count + count') (s:acc) ss
-        Count count' False -> go (count + count') acc ss
-
-  go' !count s [] = Count count True
-  go' !count s (c:cc) = if satisfies s c then go' (count+1) s cc else Count (count+1) False
-
-  start = Hole ["inp"]
-  close = Prog . abstract1 "inp"
   sizeC : usesC : valueconstraints = problemConstraints p
 
-solve = head . fst . solutions generate
+solveSearch :: Problem -> [Prog String]
+solveSearch = solutions generate
+
+solveRedis :: Problem -> Redis [Prog String]
+solveRedis p = do
+  let key = -- assume that the database is indexed by the expected outputs
+            -- which are computed from a standard set of inputs
+            L.toStrict $ encode (map snd $ values p)
+
+  len <- scard key
+  case len of
+    Right l | l > 0 -> do
+             Right all <- smembers key
+             return $ filter (satisfies (Uses (uses p))) $ map (close . read . S.unpack) all
+    _ -> return []
+
+solve p = do
+  redisSols <- solveRedis p
+  let redisSolsSet = Set.fromList redisSols
+  let searchSols = filter (`Set.notMember` redisSolsSet) $ solveSearch p
+  return (redisSols, searchSols)
 
 allM f [] = return True
 allM f (x:xx) = do

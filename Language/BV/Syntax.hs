@@ -17,49 +17,27 @@ import Data.Word
 import Prelude.Extras
 import Language.BV.Tree
 
-newtype Prog a = Prog {unProg :: Scope () (Free ExpF) a} deriving (Eq,Ord)
-
-deriving instance Eq a => Eq (Free ExpF a)
-deriving instance Ord a => Ord (Free ExpF a)
-deriving instance Show a => Show (Free ExpF a)
-instance Eq1 (Free ExpF)
-instance Ord1 (Free ExpF)
-instance Show1 (Free ExpF)
-
-mkProg exp = let var = "IN" in Prog $ abstract1 var $ exp (V var)
-
 type Value = Word64
 
-data ExpF k =
+data ExpFV v k =
              If !k k k
            | Op1 Op !k
            | Op2 Op !k !k
-           | C Word64
+           | C v
   deriving (Eq,Ord,Show,Read,Functor,Foldable,Traversable)
 
-type Exp a = Free ExpF a
+type ExpF = ExpFV Word64
 
-var = V
-v_in = var "inp"
-if0 a b c = In (If a b c)
-fold' e e0 v1 v2 body = Fold e e0 exp
-  where
-    exp = abstract (\b -> if b == v1 then Just V1 else
-                          if b == v2 then Just V2 else Nothing)
-                   body
+data ConstantValueOrBottom = ConstantValue {-#UNPACK#-} !Word64 | Bottom
+instance Eq ConstantValueOrBottom where
+  ConstantValue a == ConstantValue b = a == b
+  _ == _ = False
+instance Ord ConstantValueOrBottom where
+  ConstantValue a `compare` ConstantValue b = compare a b
+  ConstantValue{} `compare` _ = GT
+  _ `compare` _ = LT
 
-fold e e0 body = fold' e e0 "arg" "v0" (body (V "arg") (V "v0"))
-
-op1 op = In . Op1 op
-op2 op a = In . Op2 op a
-constant = In . C
-hole = In Hole
-neg  = In . Op1 Not
-
-c0 = constant 0
-c1 = constant 1
-
-plus = op2 Plus
+type Exp = Free ConstantValueOrBottom ExpF
 
 data Op  = Not | Shl1 | Shr1 | Shr4 | Shr16  -- arity one
          | And | Or | Xor | Plus             -- arity two
@@ -67,9 +45,6 @@ data Op  = Not | Shl1 | Shr1 | Shr4 | Shr16  -- arity one
          | C1                                -- META deduced from eval(0)
          | Bonus
            deriving (Eq, Ord, Read, Show)
-
-shl1 = In . Op1 Shl1
-shr1 = In . Op1 Shr1
 
 readOp :: String -> Op
 readOp "if0"  = IfOp

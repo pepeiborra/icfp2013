@@ -6,13 +6,14 @@ import Control.DeepSeq
 
 import Language.BV.Tree
 import Language.BV.Syntax
+import Language.BV.Program
 
 instance NFData (Prog String) where
-    rnf (Prog x) = rnf (unscope x)
+    rnf = rnf . unscope . unProg
 
-instance NFData a => NFData (Free ExpF a) where
+instance NFData a => NFData (Free m ExpF a) where
     rnf (V x)  = rnf x
-    rnf (In f) = rnf f
+    rnf (In _ m f) = rnf f
     rnf (Fold a b f) = rnf a `seq` rnf b `seq` rnf (unscope f)
 
 instance NFData a => NFData (ExpF a) where

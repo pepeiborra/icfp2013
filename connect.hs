@@ -27,6 +27,7 @@ import System.IO.Unsafe
 import qualified Prelude
 
 import Language.BV.Parser
+import Language.BV.Program
 import Language.BV.Pretty
 import Language.BV.Solve (Problem(..))
 import Language.BV.Syntax
@@ -203,7 +204,7 @@ instance ToJSON TrainRequest where
 -}
 data TrainingProblem = TrainingProblem (Prog String) Problem
                      | ParseFailure Text Text
-                     deriving Show
+
 instance FromJSON TrainingProblem where
     parseJSON (Object v) = do
       epgm <- parseProgram <$> v .: "challenge"

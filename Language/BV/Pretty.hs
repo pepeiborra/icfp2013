@@ -7,20 +7,22 @@ import Bound.Scope
 import Data.Char
 import Data.Foldable (Foldable)
 import Text.PrettyPrint.HughesPJClass
-import Language.BV.Eval (instantiate2)
-import Language.BV.Syntax
-import Language.BV.Tree
 import Text.Parsec.Error
 
+import Language.BV.Eval (instantiate2,v_in)
+import Language.BV.Syntax
+import Language.BV.Tree
+import Language.BV.Program
+
 instance Show (Prog String) where show = show . pPrint
+instance Show (Exp  String) where show = show . pPrint
 
 instance Pretty Op where
   pPrint = text . map toLower . show
 
-instance (Functor f, Foldable f, Pretty1 f) => Pretty (Free f String) where
+instance (Functor f, Foldable f, Pretty1 f) => Pretty (Free m f String) where
   pPrintPrec level prec (V v)  = text v
-  pPrintPrec level prec (In f) = pPrintPrec1 level prec f
-  pPrintPrec level prec (Hole vv) = text "?"
+  pPrintPrec level prec (In _ _ f) = pPrintPrec1 level prec f
   pPrintPrec level prec (Fold e0 e1 body) =
       let body' = instantiate2 body (V x) (V acc)
           x   = nameVar "x" level
@@ -42,8 +44,8 @@ instance Pretty1 ExpF where
   pPrintPrec1 level prec (Op2 op e1 e2) = parens (pPrint op <+> pPrintPrec level prec e1 <+> pPrintPrec level prec e2)
 
 instance Pretty (Prog String) where
-  pPrint (Prog sc) =
-      parens(text "lambda (inp)" <+> pPrint (instantiate1 v_in sc))
+  pPrint sc =
+      parens(text "lambda (inp)" <+> pPrint (instantiate1 v_in $ unProg sc))
 
 instance Pretty (ParseError) where pPrint = text . show
 
